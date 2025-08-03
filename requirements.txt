@@ -3,4 +3,4 @@ ultralytics
 Pillow
 requests
 geocoder
-opencv-python
+opencv-python-headless
