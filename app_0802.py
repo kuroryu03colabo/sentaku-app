@@ -142,7 +142,7 @@ if uploaded_file is not None:
 
         # 検出結果をプロットした画像を表示
         plotted_image = results[0].plot()
-        st.image(plotted_image, caption="検出結果", use_column_width=True)
+        st.image(plotted_image, caption="検出結果", use_container_width=True)
         
         # 予測結果を処理
         detected_symbols = []
@@ -177,86 +177,101 @@ if uploaded_file is not None:
                 if "OK" in best_symbol:
                     st.subheader("☀️ 天気予報によるアドバイス")
 
-                    # URLクエリから緯度経度を取得
-                    query_params = st.query_params
-                    latitude = query_params.get("lat", None)
-                    longitude = query_params.get("lon", None)
+                    # 日本の主要都市の緯度経度を定義
+                    cities = {
+                        "東京": {"lat": 35.6895, "lon": 139.6917},
+                        "大阪": {"lat": 34.6937, "lon": 135.5023},
+                        "札幌": {"lat": 43.0618, "lon": 141.3545},
+                        "福岡": {"lat": 33.5904, "lon": 130.4017},
+                        "仙台": {"lat": 38.2682, "lon": 140.8701},
+                        "那覇": {"lat": 26.2124, "lon": 127.6806},
+                        "名古屋": {"lat": 35.1815, "lon": 136.9066},
+                        "横浜": {"lat": 35.4478, "lon": 139.6426},
+                        "広島": {"lat": 34.3853, "lon": 132.4553},
+                    }
+                    
+                    # ユーザーに都市を選択させる
+                    selected_city_name = st.selectbox(
+                        "天気予報を表示する主要都市を選択してください",
+                        options=list(cities.keys())
+                    )
 
-                    if latitude and longitude:
-                        # 緯度経度が取得できた場合
-                        latitude = float(latitude[0])
-                        longitude = float(longitude[0])
-                        
-                        st.write(f"位置情報を取得しました: 緯度 {latitude:.2f}, 経度 {longitude:.2f}")
+                    # 選択された都市の緯度経度を取得
+                    selected_city = cities[selected_city_name]
+                    latitude = selected_city["lat"]
+                    longitude = selected_city["lon"]
+                    
+                    st.write(f"**{selected_city_name}** の天気予報を取得します。")
 
-                        with st.spinner("天気予報を検索中です..."):
-                            try:
-                                # Open-Meteo APIを呼び出し
-                                weather_url = "https://api.open-meteo.com/v1/forecast"
-                                params = {
-                                    "latitude": latitude,
-                                    "longitude": longitude,
-                                    "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code",
-                                    "timezone": "auto"
-                                }
-                                response = requests.get(weather_url, params=params)
-                                response.raise_for_status() # HTTPエラーをチェック
-                                weather_data = response.json()
-                                
-                                if 'current' in weather_data:
-                                    current_weather = weather_data['current']
-                                    temp = current_weather.get('temperature_2m')
-                                    humidity = current_weather.get('relative_humidity_2m')
-                                    wind_speed = current_weather.get('wind_speed_10m')
-                                    precipitation = current_weather.get('precipitation')
-                                    weather_code = current_weather.get('weather_code')
-
-                                    drying_info = determine_drying_conditions(temp, humidity, wind_speed, precipitation, weather_code)
-                                    
-                                    st.subheader(f"🧺 乾きやすさ: {drying_info['drying_status']}")
-                                    st.write(drying_info['recommendation'])
-                                else:
-                                    st.warning("天気予報データが見つかりませんでした。")
-                                    
-                            except requests.exceptions.RequestException as e:
-                                st.error(f"天気予報APIへの接続中にエラーが発生しました: {e}")
-                            except Exception as e:
-                                st.error(f"天気予報処理中に予期せぬエラーが発生しました: {e}")
-                    else:
-                        # 緯度経度がまだURLにない場合、JavaScriptで取得し、URLに追加する
-                        st.info("現在地の天気予報を取得するには、位置情報の利用を許可してください。")
-                        st.html("""
-                        <script>
-                            if (navigator.geolocation) {
-                                navigator.geolocation.getCurrentPosition(
-                                    (position) => {
-                                        const url = new URL(window.location.href);
-                                        url.searchParams.set('lat', position.coords.latitude);
-                                        url.searchParams.set('lon', position.coords.longitude);
-                                        window.location.href = url.toString();
-                                    },
-                                    (error) => {
-                                        console.error("Geolocation error: ", error);
-                                        // ユーザーが位置情報を拒否した場合など
-                                        const url = new URL(window.location.href);
-                                        url.searchParams.set('geo_denied', 'true');
-                                        window.location.href = url.toString();
-                                    }
-                                );
-                            } else {
-                                // 位置情報が非対応のブラウザの場合
-                                const url = new URL(window.location.href);
-                                url.searchParams.set('geo_unsupported', 'true');
-                                window.location.href = url.toString();
+                    with st.spinner("天気予報を検索中です..."):
+                        try:
+                            # Open-Meteo APIを呼び出し
+                            weather_url = "https://api.open-meteo.com/v1/forecast"
+                            params = {
+                                "latitude": latitude,
+                                "longitude": longitude,
+                                "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code",
+                                "hourly": "precipitation_probability,weather_code",  # hourlyデータを追加
+                                "forecast_hours": 12, # これから12時間分を取得
+                                "timezone": "auto"
                             }
-                        </script>
-                        """)
-                        if "geo_denied" in query_params:
-                            st.warning("位置情報が許可されませんでした。天気予報のアドバイスは表示されません。")
-                        elif "geo_unsupported" in query_params:
-                            st.warning("お使いのブラウザは位置情報に対応していません。")
-                        else:
-                            st.warning("位置情報を取得中です...ブラウザのポップアップで「許可」を押してください。")
+                            response = requests.get(weather_url, params=params)
+                            response.raise_for_status() # HTTPエラーをチェック
+                            weather_data = response.json()
+                            
+                            if 'current' in weather_data:
+                                current_weather = weather_data['current']
+                                temp = current_weather.get('temperature_2m')
+                                humidity = current_weather.get('relative_humidity_2m')
+                                wind_speed = current_weather.get('wind_speed_10m')
+                                precipitation = current_weather.get('precipitation')
+                                weather_code = current_weather.get('weather_code')
+
+                                drying_info = determine_drying_conditions(temp, humidity, wind_speed, precipitation, weather_code)
+
+                                # 今後の天気予報のサマリー
+                                forecast_text = "天気予報データが不足しています。"
+                                max_precipitation_prob = 0
+                                if 'hourly' in weather_data and weather_data['hourly']:
+                                    hourly_data = weather_data['hourly']
+                                    
+                                    # 降水確率の最大値を計算
+                                    max_precipitation_prob = max(hourly_data['precipitation_probability'])
+                                    
+                                    # 今後の天気を判断
+                                    has_rain = any(wc in [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82] for wc in hourly_data['weather_code'])
+                                    has_snow = any(wc in [71, 73, 75, 77, 85, 86] for wc in hourly_data['weather_code'])
+                                    has_thunderstorm = any(wc in [95, 96, 99] for wc in hourly_data['weather_code'])
+                                    
+                                    if has_rain:
+                                        forecast_text = "これから雨が降るかもしれません。"
+                                    elif has_snow:
+                                        forecast_text = "これから雪が降るかもしれません。"
+                                    elif has_thunderstorm:
+                                        forecast_text = "これから雷雨になるかもしれません。"
+                                    elif max_precipitation_prob > 0:
+                                        forecast_text = "これからにわか雨があるかもしれません。"
+                                    elif all(wc in [0, 1] for wc in hourly_data['weather_code']):
+                                        forecast_text = "これからずっと晴れの予報です。"
+                                    elif any(wc in [2, 3] for wc in hourly_data['weather_code']):
+                                        forecast_text = "これから曇りが続く予報です。"
+                                    else:
+                                        forecast_text = "今後の天気は安定しているようです。"
+                                
+                                st.write(f"**現在の気温:** {temp}°C")
+                                st.markdown(f"<p style='white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>**今後の予報:** {forecast_text}</p>", unsafe_allow_html=True)
+                                st.markdown(f"<p style='white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>**これから12時間の降水確率:** {max_precipitation_prob}%</p>", unsafe_allow_html=True)
+                                
+                                st.subheader(f"🧺 乾きやすさ: {drying_info['drying_status']}")
+                                # アドバイスを一行で表示するように修正
+                                st.markdown(f"<p style='white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>{drying_info['recommendation']}</p>", unsafe_allow_html=True)
+                            else:
+                                st.warning("天気予報データが見つかりませんでした。")
+                                
+                        except requests.exceptions.RequestException as e:
+                            st.error(f"天気予報APIへの接続中にエラーが発生しました: {e}")
+                        except Exception as e:
+                            st.error(f"天気予報処理中に予期せぬエラーが発生しました: {e}")
 
             else:
                 st.warning("画像から洗濯表示タグが検出できませんでした。")
