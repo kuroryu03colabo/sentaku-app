@@ -5,6 +5,7 @@ import requests
 from PIL import Image
 import numpy as np
 from ultralytics import YOLO
+import geocoder # ユーザーの位置情報を取得するために使用
 import os
 
 # --- アプリケーション設定 ---
@@ -186,86 +187,51 @@ if uploaded_file is not None:
                 if "OK" in best_symbol:
                     st.subheader("☀️ 天気予報によるアドバイス")
 
-                    # セッションステートを使用して、緯度経度を一度だけ取得するようにする
-                    if "lat_lon" not in st.session_state:
-                        st.session_state.lat_lon = None
+                    with st.spinner("位置情報を取得し、天気予報を検索中です..."):
+                        try:
+                            # ユーザーのIPアドレスから位置情報を取得します。
+                            g = geocoder.ip('me')
+                            if g.latlng:
+                                latitude, longitude = g.latlng
+                                # geocoderから場所名を取得します
+                                location_name = g.city or g.address or "不明な場所"
+                                st.write(f"位置情報を取得しました: **{location_name}** (緯度 {latitude:.2f}, 経度 {longitude:.2f})")
 
-                    # st.htmlでJavaScriptを実行し、緯度経度を取得
-                    st.html("""
-                    <script>
-                    window.streamlit_lat_lon = null;
-                    if (navigator.geolocation) {
-                      navigator.geolocation.getCurrentPosition(
-                        (position) => {
-                          const lat = position.coords.latitude;
-                          const lon = position.coords.longitude;
-                          window.streamlit_lat_lon = JSON.stringify({lat, lon});
-                        },
-                        (error) => {
-                          console.error("Geolocation error: ", error);
-                          window.streamlit_lat_lon = JSON.stringify({error: true});
-                        }
-                      );
-                    } else {
-                      window.streamlit_lat_lon = JSON.stringify({error: true});
-                    }
-                    </script>
-                    """)
-                    
-                    # JavaScriptから緯度経度をPythonに渡す
-                    # HTMLコンポーネントが値を返すのを待つために、再実行ボタンを使用
-                    if st.session_state.lat_lon is None and st.button("現在地の天気予報を取得"):
-                        st.session_state.lat_lon = st.session_state.get('lat_lon', None)
-                        st.rerun()
+                                # Open-Meteo APIを呼び出し
+                                weather_url = "https://api.open-meteo.com/v1/forecast"
+                                params = {
+                                    "latitude": latitude,
+                                    "longitude": longitude,
+                                    "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code",
+                                    "timezone": "auto"
+                                }
+                                response = requests.get(weather_url, params=params)
+                                response.raise_for_status() # HTTPエラーをチェック
+                                weather_data = response.json()
+                                
+                                # 天気予報から室内干しか外干しかを判断
+                                if 'current' in weather_data:
+                                    current_weather = weather_data['current']
+                                    temp = current_weather.get('temperature_2m')
+                                    humidity = current_weather.get('relative_humidity_2m')
+                                    wind_speed = current_weather.get('wind_speed_10m')
+                                    precipitation = current_weather.get('precipitation')
+                                    weather_code = current_weather.get('weather_code')
 
-                    if st.session_state.lat_lon is not None and st.session_state.lat_lon != 'null':
-                        lat_lon_data = st.session_state.lat_lon
-                        if "error" in lat_lon_data:
-                             st.warning("位置情報を取得できませんでした。天気予報のアドバイスは表示されません。")
-                        else:
-                            latitude = lat_lon_data["lat"]
-                            longitude = lat_lon_data["lon"]
-                            
-                            st.write(f"位置情報を取得しました: 緯度 {latitude:.2f}, 経度 {longitude:.2f}")
-
-                            with st.spinner("天気予報を検索中です..."):
-                                try:
-                                    # Open-Meteo APIを呼び出し
-                                    weather_url = "https://api.open-meteo.com/v1/forecast"
-                                    params = {
-                                        "latitude": latitude,
-                                        "longitude": longitude,
-                                        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code",
-                                        "timezone": "auto"
-                                    }
-                                    response = requests.get(weather_url, params=params)
-                                    response.raise_for_status() # HTTPエラーをチェック
-                                    weather_data = response.json()
+                                    # 新しいロジックで乾きやすさを判断
+                                    drying_info = determine_drying_conditions(temp, humidity, wind_speed, precipitation, weather_code)
                                     
-                                    # 天気予報から室内干しか外干しかを判断
-                                    if 'current' in weather_data:
-                                        current_weather = weather_data['current']
-                                        temp = current_weather.get('temperature_2m')
-                                        humidity = current_weather.get('relative_humidity_2m')
-                                        wind_speed = current_weather.get('wind_speed_10m')
-                                        precipitation = current_weather.get('precipitation')
-                                        weather_code = current_weather.get('weather_code')
-
-                                        # ロジックで乾きやすさを判断
-                                        drying_info = determine_drying_conditions(temp, humidity, wind_speed, precipitation, weather_code)
-                                        
-                                        st.subheader(f"🧺 乾きやすさ: {drying_info['drying_status']}")
-                                        st.write(drying_info['recommendation'])
-                                    else:
-                                        st.warning("天気予報データが見つかりませんでした。")
-                                        
-                                except requests.exceptions.RequestException as e:
-                                    st.error(f"天気予報APIへの接続中にエラーが発生しました: {e}")
-                                except Exception as e:
-                                    st.error(f"天気予報処理中に予期せぬエラーが発生しました: {e}")
-                    else:
-                        st.info("現在地の天気予報を取得するには、上記のボタンを押して位置情報の利用を許可してください。")
-
+                                    st.subheader(f"🧺 乾きやすさ: {drying_info['drying_status']}")
+                                    st.write(drying_info['recommendation'])
+                                else:
+                                    st.warning("天気予報データが見つかりませんでした。")
+                            else:
+                                st.warning("位置情報を取得できませんでした。天気予報のアドバイスは表示されません。")
+                                
+                        except requests.exceptions.RequestException as e:
+                            st.error(f"天気予報APIへの接続中にエラーが発生しました: {e}")
+                        except Exception as e:
+                            st.error(f"天気予報処理中に予期せぬエラーが発生しました: {e}")
             else:
                 st.warning("画像から洗濯表示タグが検出できませんでした。")
         else:
@@ -275,3 +241,4 @@ else:
 
 st.markdown("---")
 st.markdown("※ 本アプリはデモンストレーション用です。正確な洗濯情報は必ず製品のタグをご確認ください。")
+st.markdown("※ `geocoder`ライブラリは、ユーザーのIPアドレスに基づいた位置情報を取得します。プライバシーに関する懸念がある場合は、この機能をオフにするか、より正確な位置情報取得方法を検討してください。")
