@@ -6,6 +6,7 @@ from PIL import Image
 import numpy as np
 from ultralytics import YOLO
 import os
+import json # JSONデータを扱うために追加
 
 # --- アプリケーション設定 ---
 st.set_page_config(
@@ -31,29 +32,6 @@ try:
 except Exception as e:
     st.error(f"モデルのロード中にエラーが発生しました: {e}")
     st.stop()
-
-# APIキーのセキュリティに関する注意
-# Open-Meteo APIはAPIキーを必要としませんが、他のサービスでAPIキーを使用する際は
-# Streamlit Cloudのシークレット機能 `st.secrets` を使用することを強く推奨します。
-# `secrets.toml` ファイルに以下のように記述します:
-# [api_keys]
-# open_meteo_dummy = "your_secret_key"
-# st.secrets.api_keys.open_meteo_dummy でアクセスできます。
-
-# --- UI要素 ---
-# 画像入力方法の選択
-input_method = st.sidebar.radio(
-    "画像入力方法を選択してください",
-    ("カメラで撮影", "画像をアップロード")
-)
-
-uploaded_file = None
-if input_method == "カメラで撮影":
-    st.markdown("カメラで洗濯表示タグを撮影してください。")
-    uploaded_file = st.camera_input("カメラ起動")
-else:
-    st.markdown("洗濯表示タグの画像をアップロードしてください。")
-    uploaded_file = st.file_uploader("画像をアップロード", type=["jpg", "jpeg", "png"])
 
 # --- 天気情報から洗濯物の乾きやすさを判断するロジック ---
 def determine_drying_conditions(temp, humidity, wind_speed, precipitation, weather_code):
@@ -136,6 +114,21 @@ def determine_drying_conditions(temp, humidity, wind_speed, precipitation, weath
 
     return {"drying_status": drying_status, "recommendation": recommendation}
 
+# --- UI要素 ---
+# 画像入力方法の選択
+input_method = st.sidebar.radio(
+    "画像入力方法を選択してください",
+    ("カメラで撮影", "画像をアップロード")
+)
+
+uploaded_file = None
+if input_method == "カメラで撮影":
+    st.markdown("カメラで洗濯表示タグを撮影してください。")
+    uploaded_file = st.camera_input("カメラ起動")
+else:
+    st.markdown("洗濯表示タグの画像をアップロードしてください。")
+    uploaded_file = st.file_uploader("画像をアップロード", type=["jpg", "jpeg", "png"])
+
 # --- 処理の実行 ---
 if uploaded_file is not None:
     # 画像をPIL Imageオブジェクトに変換
@@ -148,7 +141,6 @@ if uploaded_file is not None:
         results = model.predict(image)
 
         # 検出結果をプロットした画像を表示
-        # YOLOv8のplot()メソッドを使用すると、検出された物体に自動的に枠とラベルが描画されます。
         plotted_image = results[0].plot()
         st.image(plotted_image, caption="検出結果", use_column_width=True)
         
@@ -165,7 +157,6 @@ if uploaded_file is not None:
         CONFIDENCE_THRESHOLD = 0.7
 
         if detected_symbols:
-            # 信頼度が最も高いものを結果として採用
             best_symbol, best_confidence = max(detected_symbols, key=lambda item: item[1])
 
             if best_confidence >= CONFIDENCE_THRESHOLD:
@@ -186,85 +177,79 @@ if uploaded_file is not None:
                 if "OK" in best_symbol:
                     st.subheader("☀️ 天気予報によるアドバイス")
 
-                    # セッションステートを使用して、緯度経度を一度だけ取得するようにする
-                    if "lat_lon" not in st.session_state:
-                        st.session_state.lat_lon = None
+                    # URLクエリから緯度経度を取得
+                    query_params = st.query_params
+                    latitude = query_params.get("lat", None)
+                    longitude = query_params.get("lon", None)
 
-                    # st.htmlでJavaScriptを実行し、緯度経度を取得
-                    st.html("""
-                    <script>
-                    window.streamlit_lat_lon = null;
-                    if (navigator.geolocation) {
-                      navigator.geolocation.getCurrentPosition(
-                        (position) => {
-                          const lat = position.coords.latitude;
-                          const lon = position.coords.longitude;
-                          window.streamlit_lat_lon = JSON.stringify({lat, lon});
-                        },
-                        (error) => {
-                          console.error("Geolocation error: ", error);
-                          window.streamlit_lat_lon = JSON.stringify({error: true});
-                        }
-                      );
-                    } else {
-                      window.streamlit_lat_lon = JSON.stringify({error: true});
-                    }
-                    </script>
-                    """)
-                    
-                    # JavaScriptから緯度経度をPythonに渡す
-                    # HTMLコンポーネントが値を返すのを待つために、再実行ボタンを使用
-                    if st.session_state.lat_lon is None and st.button("現在地の天気予報を取得"):
-                        st.session_state.lat_lon = st.session_state.get('lat_lon', None)
-                        st.rerun()
+                    if latitude and longitude:
+                        # 緯度経度が取得できた場合
+                        latitude = float(latitude[0])
+                        longitude = float(longitude[0])
+                        
+                        st.write(f"位置情報を取得しました: 緯度 {latitude:.2f}, 経度 {longitude:.2f}")
 
-                    if st.session_state.lat_lon is not None and st.session_state.lat_lon != 'null':
-                        lat_lon_data = st.session_state.lat_lon
-                        if "error" in lat_lon_data:
-                             st.warning("位置情報を取得できませんでした。天気予報のアドバイスは表示されません。")
-                        else:
-                            latitude = lat_lon_data["lat"]
-                            longitude = lat_lon_data["lon"]
-                            
-                            st.write(f"位置情報を取得しました: 緯度 {latitude:.2f}, 経度 {longitude:.2f}")
+                        with st.spinner("天気予報を検索中です..."):
+                            try:
+                                # Open-Meteo APIを呼び出し
+                                weather_url = "https://api.open-meteo.com/v1/forecast"
+                                params = {
+                                    "latitude": latitude,
+                                    "longitude": longitude,
+                                    "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code",
+                                    "timezone": "auto"
+                                }
+                                response = requests.get(weather_url, params=params)
+                                response.raise_for_status() # HTTPエラーをチェック
+                                weather_data = response.json()
+                                
+                                if 'current' in weather_data:
+                                    current_weather = weather_data['current']
+                                    temp = current_weather.get('temperature_2m')
+                                    humidity = current_weather.get('relative_humidity_2m')
+                                    wind_speed = current_weather.get('wind_speed_10m')
+                                    precipitation = current_weather.get('precipitation')
+                                    weather_code = current_weather.get('weather_code')
 
-                            with st.spinner("天気予報を検索中です..."):
-                                try:
-                                    # Open-Meteo APIを呼び出し
-                                    weather_url = "https://api.open-meteo.com/v1/forecast"
-                                    params = {
-                                        "latitude": latitude,
-                                        "longitude": longitude,
-                                        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation,weather_code",
-                                        "timezone": "auto"
-                                    }
-                                    response = requests.get(weather_url, params=params)
-                                    response.raise_for_status() # HTTPエラーをチェック
-                                    weather_data = response.json()
+                                    drying_info = determine_drying_conditions(temp, humidity, wind_speed, precipitation, weather_code)
                                     
-                                    # 天気予報から室内干しか外干しかを判断
-                                    if 'current' in weather_data:
-                                        current_weather = weather_data['current']
-                                        temp = current_weather.get('temperature_2m')
-                                        humidity = current_weather.get('relative_humidity_2m')
-                                        wind_speed = current_weather.get('wind_speed_10m')
-                                        precipitation = current_weather.get('precipitation')
-                                        weather_code = current_weather.get('weather_code')
-
-                                        # ロジックで乾きやすさを判断
-                                        drying_info = determine_drying_conditions(temp, humidity, wind_speed, precipitation, weather_code)
-                                        
-                                        st.subheader(f"🧺 乾きやすさ: {drying_info['drying_status']}")
-                                        st.write(drying_info['recommendation'])
-                                    else:
-                                        st.warning("天気予報データが見つかりませんでした。")
-                                        
-                                except requests.exceptions.RequestException as e:
-                                    st.error(f"天気予報APIへの接続中にエラーが発生しました: {e}")
-                                except Exception as e:
-                                    st.error(f"天気予報処理中に予期せぬエラーが発生しました: {e}")
+                                    st.subheader(f"🧺 乾きやすさ: {drying_info['drying_status']}")
+                                    st.write(drying_info['recommendation'])
+                                else:
+                                    st.warning("天気予報データが見つかりませんでした。")
+                                    
+                            except requests.exceptions.RequestException as e:
+                                st.error(f"天気予報APIへの接続中にエラーが発生しました: {e}")
+                            except Exception as e:
+                                st.error(f"天気予報処理中に予期せぬエラーが発生しました: {e}")
                     else:
-                        st.info("現在地の天気予報を取得するには、上記のボタンを押して位置情報の利用を許可してください。")
+                        # 緯度経度がまだURLにない場合、JavaScriptで取得し、URLに追加する
+                        st.html("""
+                        <script>
+                            function getLocation() {
+                                if (navigator.geolocation) {
+                                    navigator.geolocation.getCurrentPosition(
+                                        (position) => {
+                                            const lat = position.coords.latitude;
+                                            const lon = position.coords.longitude;
+                                            const newUrl = `${window.location.href}&lat=${lat}&lon=${lon}`;
+                                            window.location.href = newUrl;
+                                        },
+                                        (error) => {
+                                            console.error("Geolocation error: ", error);
+                                            alert("位置情報の取得に失敗しました。");
+                                        }
+                                    );
+                                } else {
+                                    alert("このブラウザは位置情報に対応していません。");
+                                }
+                            }
+                        </script>
+                        """)
+                        if st.button("現在地の天気予報を取得"):
+                            # ボタンクリックでJavaScriptの関数を呼び出す
+                            st.write("<script>getLocation();</script>", unsafe_allow_html=True)
+                            st.rerun()
 
             else:
                 st.warning("画像から洗濯表示タグが検出できませんでした。")
