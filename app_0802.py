@@ -6,7 +6,7 @@ from PIL import Image
 import numpy as np
 from ultralytics import YOLO
 import os
-import json # JSONデータを扱うために追加
+import json
 
 # --- アプリケーション設定 ---
 st.set_page_config(
@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 # タイトル
-st.title("👕 洗濯表示タグ識別アプリ")
+st.markdown("<h1 style='white-space: nowrap; overflow: hidden; text-overflow: ellipsis;'>👕 洗濯表示タグ<br>識別アプリ</h1>", unsafe_allow_html=True)
 st.markdown("洗濯表示タグの画像をアップロードするか、カメラで撮影して、洗濯方法と外干し/部屋干しのアドバイスを取得します。")
 
 # --- モデルとAPIの設定 ---
@@ -224,32 +224,39 @@ if uploaded_file is not None:
                                 st.error(f"天気予報処理中に予期せぬエラーが発生しました: {e}")
                     else:
                         # 緯度経度がまだURLにない場合、JavaScriptで取得し、URLに追加する
+                        st.info("現在地の天気予報を取得するには、位置情報の利用を許可してください。")
                         st.html("""
                         <script>
-                            function getLocation() {
-                                if (navigator.geolocation) {
-                                    navigator.geolocation.getCurrentPosition(
-                                        (position) => {
-                                            const lat = position.coords.latitude;
-                                            const lon = position.coords.longitude;
-                                            const newUrl = `${window.location.href}&lat=${lat}&lon=${lon}`;
-                                            window.location.href = newUrl;
-                                        },
-                                        (error) => {
-                                            console.error("Geolocation error: ", error);
-                                            alert("位置情報の取得に失敗しました。");
-                                        }
-                                    );
-                                } else {
-                                    alert("このブラウザは位置情報に対応していません。");
-                                }
+                            if (navigator.geolocation) {
+                                navigator.geolocation.getCurrentPosition(
+                                    (position) => {
+                                        const url = new URL(window.location.href);
+                                        url.searchParams.set('lat', position.coords.latitude);
+                                        url.searchParams.set('lon', position.coords.longitude);
+                                        window.location.href = url.toString();
+                                    },
+                                    (error) => {
+                                        console.error("Geolocation error: ", error);
+                                        // ユーザーが位置情報を拒否した場合など
+                                        const url = new URL(window.location.href);
+                                        url.searchParams.set('geo_denied', 'true');
+                                        window.location.href = url.toString();
+                                    }
+                                );
+                            } else {
+                                // 位置情報が非対応のブラウザの場合
+                                const url = new URL(window.location.href);
+                                url.searchParams.set('geo_unsupported', 'true');
+                                window.location.href = url.toString();
                             }
                         </script>
                         """)
-                        if st.button("現在地の天気予報を取得"):
-                            # ボタンクリックでJavaScriptの関数を呼び出す
-                            st.write("<script>getLocation();</script>", unsafe_allow_html=True)
-                            st.rerun()
+                        if "geo_denied" in query_params:
+                            st.warning("位置情報が許可されませんでした。天気予報のアドバイスは表示されません。")
+                        elif "geo_unsupported" in query_params:
+                            st.warning("お使いのブラウザは位置情報に対応していません。")
+                        else:
+                            st.warning("位置情報を取得中です...ブラウザのポップアップで「許可」を押してください。")
 
             else:
                 st.warning("画像から洗濯表示タグが検出できませんでした。")
